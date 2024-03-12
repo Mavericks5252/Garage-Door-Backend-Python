@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export default function WebSocketCall({ socket }) {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([]);
+  const [open, setOpen] = useState("");
 
   const handleText = (e) => {
     const inputMessage = e.target.value;
@@ -13,7 +14,9 @@ export default function WebSocketCall({ socket }) {
     if (!message) {
       return;
     }
+    console.log("sent");
     socket.emit("data", message);
+    console.log("sent");
     setMessage("");
   };
 
@@ -27,6 +30,19 @@ export default function WebSocketCall({ socket }) {
       });
     };
   }, [socket, messages]);
+
+  useEffect(() => {
+    socket.on("event", (data) => {
+      setOpen(data.data);
+      console.log("0");
+    });
+    return () => {
+      socket.off("data", () => {
+        console.log("data event was removed");
+      });
+    };
+  }, [socket, open]);
+
 
   return (
     <div>
