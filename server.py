@@ -1,71 +1,100 @@
-import gpiod
+from flask import Flask, request,jsonify
+from flask_socketio import SocketIO,emit
+from flask_cors import CORS
 import time
-from flask import Flask, request, jsonify, make_response
-
-DOOR_PIN=7
-LED_PIN=0
-#pi = pigpio.pi()
-chip = gpiod.Chip('gpiochip4')
-
-led_line = chip.get_line(LED_PIN)
-door_line = chip.get_line(DOOR_PIN)
-
-#led_line.active_state= led_line.ACTIVE_LOW
-led_line.request(consumer="LED",type=gpiod.LINE_REQ_DIR_OUT)
-door_line.request(consumer="DOOR",type=gpiod.LINE_REQ_DIR_OUT)
-
-#The device is set as a value of 1=on and 0=off however a relay works the opposite
-#In our case if we want the circuit to complete we need a value of 0. If we want to turn off the circuit we use 1
-
-#Set initial Value
-door_line.set_value(1)
-led_line.set_value(1)
-
-
-def set_relay_controller(relay, value):
-    #read 2 comments back
-    if relay == "door":
-        door_line.set_value(0)
-        time.sleep(1)
-        door_line.set_value(1)
-    elif relay == "light":
-        led_line.set_value(0)
-        time.sleep(1)
-        led_line.set_value(1)
-
-
+from threading import Thread,Event
+from random import random
+import asyncio
+import threading
+global thread
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
+CORS(app,resources={r"/*":{"origins":"*"}})
+socketio = SocketIO(app,cors_allowed_origins="*",async_mode='eventlet')
+thread_event = Event()
+thread_stop_event = Event()
+num = 0
+doorValueStored = -1
 
 
-@app.route("/", methods=["POST", "OPTIONS"])
-def slider_data():
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Max-Age"] = "86400"
-        return response
-
-    data = request.json
-    relay = data.get("relay")
-    value = data.get("value")
-
-    if not relay or value is None:
-        return jsonify({"message": "Invalid data received"}), 400
-
-    if relay in ["door", "light"]:
-        set_relay_controller(relay, value)
-
-    print(f"Received value {value} from {relay}")
-
-    response = jsonify({"message": "Data received successfully"})
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
-
-
-if __name__ == "__main__":
+def sendDoorStatus(event):
+    print("Door Status")
+    global thread
+    doorValue = 4
     try:
-        app.run(host="0.0.0.0", port=8000)
+        while event.is_set():
+            if doorValue !=3:
+                socketio.emit("event", {'data': doorValue})
+                socketio.sleep(5)
+                print("sent 4")
+                doorValue =3
+            elif doorValue == 3:
+                socketio.emit("event", {'data': doorValue})
+                socketio.sleep(5)
+                print("sent 3")
+                doorValue = 4
+            else:
+                socketio.sleep(1)
+            socketio.sleep()
     finally:
-        led_line.release()
+        event.clear()
+        thread=None
+    #socketio.emit("event", {'data': doorValue})
+    #while not thread_stop_event.isSet():
+        #if(doorValueStored != doorValue):
+          #  print("set value")
+         #   socketio.emit("event", {'data': doorValue})
+        #    print(doorValue)
+         #   doorValueStored =doorValue
+
+@app.route("/http-call")
+def http_call():
+    """return JSON with string data as the value"""
+    data = {'data':'This text was fetched using an HTTP call to server on render'}
+    return jsonify(data)
+
+@socketio.on("connect")
+def connect():
+    print("connected")
+    global thread
+    thread = None
+    if thread is None:
+        print("Starting Thread")
+        thread_event.set()
+        thread = socketio.start_background_task(sendDoorStatus,thread_event)
+    #if not thread.is_alive():
+       # print("Starting Thread")
+        #thread = socketio.start_background_task(sendDoorStatus)
+
+
+@socketio.on("connected")
+def connected():
+    """event listener when client connects to the server"""
+    global thread
+    print(request.sid)
+    if thread:
+        print("Starting Thread")
+        thread = socketio.start_background_task(sendDoorStatus)
+    print("client has connected")
+    emit("connect",{"data":f"id: {request.sid} is connected"})
+
+@socketio.on('data')
+def handle_message(data):
+    """event listener when client types a message"""
+    print("data from the front end: ",str(data))
+
+    emit("data",{'data':data,'id':request.sid},broadcast=True)
+
+@socketio.on("disconnect")
+def disconnected():
+    """event listener when client disconnects to the server"""
+    print("user disconnected")
+    thread_stop_event.set()
+    emit("disconnect",f"user {request.sid} disconnected",broadcast=True)
+
+
+def func(value):
+    socketio.emit('event',{'data':value})
+
+if __name__ == '__main__':
+    socketio.run(app, debug=True,port=5001)
